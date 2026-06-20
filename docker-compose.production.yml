@@ -1,5 +1,3 @@
-version: '3.9'
-
 volumes:
   pg_data:
   static:
@@ -15,7 +13,7 @@ services:
       - pg_data:/var/lib/postgresql/data
 
   backend:
-    build: ./backend
+    image: seatle188/kittygram_backend:latest
     env_file:
       - .env
     volumes:
@@ -25,13 +23,13 @@ services:
       - postgres
 
   frontend:
-    build: ./frontend
+    image: seatle188/kittygram_frontend:latest
     command: cp -r /app/build/. /static/
     volumes:
       - static:/static
 
   gateway:
-    build: ./nginx
+    image: seatle188/kittygram_gateway:latest
     ports:
       - "9000:80"
     volumes:
