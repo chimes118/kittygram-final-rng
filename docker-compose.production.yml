@@ -4,7 +4,6 @@ volumes:
   media:
 
 services:
-
   postgres:
     image: postgres:13
     env_file:
@@ -37,3 +36,4 @@ services:
       - media:/media
     depends_on:
       - backend
+      - frontend
