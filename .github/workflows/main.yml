@@ -1,164 +1,173 @@
 name: Kittygram workflow
 
 on:
-push:
-branches:
-- main
-workflow_dispatch:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-tests:
-runs-on: ubuntu-latest
+  tests:
+    runs-on: ubuntu-latest
 
-steps:
-  - uses: actions/checkout@v4
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-  - uses: actions/setup-python@v5
-    with:
-      python-version: "3.9"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
 
-  - name: Install dependencies
-    run: |
-      python -m pip install --upgrade pip
-      pip install flake8 pytest
-      pip install -r backend/requirements.txt
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libjpeg-dev zlib1g-dev
 
-  - name: Flake8
-    continue-on-error: true
-    run: flake8 backend
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pytest
+          pip install -r backend/requirements.txt
 
-  - name: Run tests
-    run: pytest tests/test_files.py -v
+      - name: Run flake8
+        continue-on-error: true
+        run: flake8 backend
 
-build_and_push_to_docker_hub:
-runs-on: ubuntu-latest
-needs: tests
+      - name: Run tests
+        run: pytest tests/test_files.py -v
 
-steps:
-  - uses: actions/checkout@v4
+  build_and_push_to_docker_hub:
+    runs-on: ubuntu-latest
+    needs: tests
 
-  - uses: docker/setup-buildx-action@v3
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-  - uses: docker/login-action@v3
-    with:
-      username: ${{ secrets.DOCKER_USERNAME }}
-      password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-  - name: Backend
-    uses: docker/build-push-action@v6
-    with:
-      context: ./backend
-      push: true
-      tags: seatle188/kittygram_backend:latest
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-  - name: Frontend
-    uses: docker/build-push-action@v6
-    with:
-      context: ./frontend
-      push: true
-      tags: seatle188/kittygram_frontend:latest
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/kittygram_backend:latest
 
-  - name: Gateway
-    uses: docker/build-push-action@v6
-    with:
-      context: ./nginx
-      push: true
-      tags: seatle188/kittygram_gateway:latest
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest
 
-deploy:
-runs-on: ubuntu-latest
-needs: build_and_push_to_docker_hub
+      - name: Build and push gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nginx
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest
 
-steps:
-  - name: Deploy
-    uses: appleboy/ssh-action@v1.0.3
-    with:
-      host: ${{ secrets.HOST }}
-      username: ${{ secrets.USER }}
-      key: ${{ secrets.SSH_KEY }}
-      script: |
-        mkdir -p ~/kittygram
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build_and_push_to_docker_hub
 
-        cat > ~/kittygram/.env << 'EOF'
-        POSTGRES_DB=kittygram
-        POSTGRES_USER=kittygram_user
-        POSTGRES_PASSWORD=kittygram_password
-        DB_HOST=postgres
-        DB_PORT=5432
-        SECRET_KEY=kittygram_secret_key
-        DEBUG=False
-        ALLOWED_HOSTS=*
-        EOF
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            mkdir -p ~/kittygram
 
-        cat > ~/kittygram/docker-compose.production.yml << 'EOF'
-        volumes:
-          pg_data:
-          static:
-          media:
+            cat > ~/kittygram/.env << 'EOF'
+            POSTGRES_DB=kittygram
+            POSTGRES_USER=kittygram_user
+            POSTGRES_PASSWORD=kittygram_password
+            DB_HOST=postgres
+            DB_PORT=5432
+            SECRET_KEY=kittygram_secret_key
+            DEBUG=False
+            ALLOWED_HOSTS=*
+            EOF
 
-        services:
-          postgres:
-            image: postgres:13
-            env_file:
-              - .env
+            cat > ~/kittygram/docker-compose.production.yml << 'EOF'
             volumes:
-              - pg_data:/var/lib/postgresql/data
+              pg_data:
+              static:
+              media:
 
-          backend:
-            image: seatle188/kittygram_backend:latest
-            env_file:
-              - .env
-            volumes:
-              - static:/app/collected_static
-              - media:/app/media
-            depends_on:
-              - postgres
+            services:
+              postgres:
+                image: postgres:13
+                env_file:
+                  - .env
+                volumes:
+                  - pg_data:/var/lib/postgresql/data
 
-          frontend:
-            image: seatle188/kittygram_frontend:latest
-            command: cp -r /app/build/. /static/
-            volumes:
-              - static:/static
+              backend:
+                image: ${{ secrets.DOCKER_USERNAME }}/kittygram_backend:latest
+                env_file:
+                  - .env
+                volumes:
+                  - static:/app/collected_static
+                  - media:/app/media
+                depends_on:
+                  - postgres
 
-          gateway:
-            image: seatle188/kittygram_gateway:latest
-            ports:
-              - "9000:80"
-            volumes:
-              - static:/static
-              - media:/media
-            depends_on:
-              - backend
-              - frontend
-        EOF
+              frontend:
+                image: ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest
+                command: cp -r /app/build/. /static/
+                volumes:
+                  - static:/static
 
-        cd ~/kittygram
+              gateway:
+                image: ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest
+                ports:
+                  - "9000:80"
+                volumes:
+                  - static:/static
+                  - media:/media
+                depends_on:
+                  - backend
+                  - frontend
+            EOF
 
-        docker compose -f docker-compose.production.yml pull
-        docker compose -f docker-compose.production.yml down || true
-        docker compose -f docker-compose.production.yml up -d
+            cd ~/kittygram
+            docker compose -f docker-compose.production.yml pull
+            docker compose -f docker-compose.production.yml down || true
+            docker compose -f docker-compose.production.yml up -d
+            sleep 20
+            docker compose -f docker-compose.production.yml exec -T backend python manage.py migrate --noinput
+            docker compose -f docker-compose.production.yml exec -T backend python manage.py collectstatic --noinput
 
-        sleep 20
+  auto_tests:
+    runs-on: ubuntu-latest
+    needs: deploy
 
-        docker compose -f docker-compose.production.yml exec -T backend python manage.py migrate --noinput
-        docker compose -f docker-compose.production.yml exec -T backend python manage.py collectstatic --noinput
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-auto_tests:
-runs-on: ubuntu-latest
-needs: deploy
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
 
-steps:
-  - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest requests
+          pip install -r backend/requirements.txt
 
-  - uses: actions/setup-python@v5
-    with:
-      python-version: "3.9"
-
-  - name: Install dependencies
-    run: |
-      python -m pip install --upgrade pip
-      pip install pytest requests
-      pip install -r backend/requirements.txt
-
-  - name: Run connection tests
-    run: pytest tests/test_connection.py -v
+      - name: Run connection tests
+        run: pytest tests/test_connection.py -v
