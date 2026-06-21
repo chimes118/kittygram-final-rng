@@ -96,6 +96,12 @@ jobs:
             ALLOWED_HOSTS=*
             EOF
 
+      - name: Debug files
+        run: |
+          pwd
+          ls -la
+          cat docker-compose.production.yml
+          
       - name: Copy production compose file to server
         uses: appleboy/scp-action@v0.1.7
         with:
