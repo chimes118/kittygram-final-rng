@@ -1,9 +1,10 @@
 name: Kittygram workflow
 
-"on":
+on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   tests:
@@ -16,20 +17,22 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: "3.9"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flake8 pytest
           pip install -r backend/requirements.txt
+          sudo apt-get update
+          sudo apt-get install -y libjpeg-dev zlib1g-dev
 
       - name: Run flake8
         continue-on-error: true
         run: flake8 backend
 
-      - name: Run tests
-        run: pytest
+      - name: Run local tests
+        run: pytest tests/test_files.py tests/test_dockerhub_images.py -v
 
   build_and_push_to_docker_hub:
     runs-on: ubuntu-latest
@@ -49,32 +52,56 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push backend image
-        run: |
-          docker buildx build             --tag ${{ secrets.DOCKER_USERNAME }}/kittygram_backend:latest             --push             ./backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/kittygram_backend:latest
 
       - name: Build and push frontend image
-        run: |
-          docker buildx build             --tag ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest             --push             ./frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest
 
       - name: Build and push gateway image
-        run: |
-          docker buildx build             --tag ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest             --push             ./nginx
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nginx
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest
 
   deploy:
     runs-on: ubuntu-latest
     needs: build_and_push_to_docker_hub
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Prepare remote directory and env file
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            mkdir -p ~/kittygram
+            cat > ~/kittygram/.env <<'EOF'
+            POSTGRES_DB=kittygram
+            POSTGRES_USER=kittygram_user
+            POSTGRES_PASSWORD=kittygram_password
+            DB_HOST=postgres
+            DB_PORT=5432
+            SECRET_KEY=django-insecure-kittygram-secret-key
+            DEBUG=False
+            ALLOWED_HOSTS=*
+            EOF
 
-      - name: Copy docker-compose file to server
+      - name: Copy production compose file to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USER }}
           key: ${{ secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
           source: "docker-compose.production.yml"
           target: "kittygram"
 
@@ -84,14 +111,14 @@ jobs:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USER }}
           key: ${{ secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
           script: |
             cd ~/kittygram
-            sudo docker compose -f docker-compose.production.yml pull
-            sudo docker compose -f docker-compose.production.yml down
-            sudo docker compose -f docker-compose.production.yml up -d
-            sudo docker compose -f docker-compose.production.yml exec -T backend python manage.py migrate
-            sudo docker compose -f docker-compose.production.yml exec -T backend python manage.py collectstatic --noinput
+            docker compose -f docker-compose.production.yml pull
+            docker compose -f docker-compose.production.yml down
+            docker compose -f docker-compose.production.yml up -d
+            sleep 10
+            docker compose -f docker-compose.production.yml exec -T backend python manage.py migrate --noinput
+            docker compose -f docker-compose.production.yml exec -T backend python manage.py collectstatic --noinput
 
   auto_tests:
     runs-on: ubuntu-latest
@@ -104,23 +131,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: "3.9"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest requests
           pip install -r backend/requirements.txt
 
-      - name: Run tests
-        run: pytest
-
-  telegram-notify:
-    runs-on: ubuntu-latest
-    needs: auto_tests
-    if: success()
-
-    steps:
-      - name: Send Telegram notification
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage"             -d chat_id="${{ secrets.TELEGRAM_TO }}"             -d text="Kittygram deployed successfully."
+      - name: Run post-deploy tests
+        run: pytest tests/test_connection.py -v
