@@ -35,7 +35,7 @@ jobs:
         run: flake8 backend
 
       - name: Run tests
-        run: pytest tests/test_files.py -v
+        run: pytest
 
   build_and_push_to_docker_hub:
     runs-on: ubuntu-latest
@@ -80,7 +80,10 @@ jobs:
     needs: build_and_push_to_docker_hub
 
     steps:
-      - name: Deploy to server
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare remote directory and .env
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOST }}
@@ -88,60 +91,33 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             mkdir -p ~/kittygram
-
             cat > ~/kittygram/.env << 'EOF'
-            POSTGRES_DB=kittygram
-            POSTGRES_USER=kittygram_user
-            POSTGRES_PASSWORD=kittygram_password
+            POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+            POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
             DB_HOST=postgres
             DB_PORT=5432
-            SECRET_KEY=kittygram_secret_key
+            SECRET_KEY=${{ secrets.SECRET_KEY }}
             DEBUG=False
-            ALLOWED_HOSTS=*
+            ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}
             EOF
 
-            cat > ~/kittygram/docker-compose.production.yml << 'EOF'
-            volumes:
-              pg_data:
-              static:
-              media:
+      - name: Copy production compose file via ssh
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "docker-compose.production.yml"
+          target: "kittygram/"
 
-            services:
-              postgres:
-                image: postgres:13
-                env_file:
-                  - .env
-                volumes:
-                  - pg_data:/var/lib/postgresql/data
-
-              backend:
-                image: ${{ secrets.DOCKER_USERNAME }}/kittygram_backend:latest
-                env_file:
-                  - .env
-                volumes:
-                  - static:/app/collected_static
-                  - media:/app/media
-                depends_on:
-                  - postgres
-
-              frontend:
-                image: ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest
-                command: cp -r /app/build/. /static/
-                volumes:
-                  - static:/static
-
-              gateway:
-                image: ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest
-                ports:
-                  - "9000:80"
-                volumes:
-                  - static:/static
-                  - media:/media
-                depends_on:
-                  - backend
-                  - frontend
-            EOF
-
+      - name: Executing remote ssh commands to deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
             cd ~/kittygram
             docker compose -f docker-compose.production.yml pull
             docker compose -f docker-compose.production.yml down || true
@@ -170,7 +146,7 @@ jobs:
           pip install -r backend/requirements.txt
 
       - name: Run connection tests
-        run: pytest tests/test_connection.py -v
+        run: pytest
 
   telegram-notify:
     runs-on: ubuntu-latest

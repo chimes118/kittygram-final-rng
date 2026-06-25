@@ -3,9 +3,11 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+from django.core.management.utils import get_random_secret_key
+
 SECRET_KEY = os.getenv(
-    'SECRET_KEY',
-    'temporary-secret-key'
+    "SECRET_KEY",
+    get_random_secret_key()
 )
 
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
@@ -14,7 +16,6 @@ ALLOWED_HOSTS = os.getenv(
     'ALLOWED_HOSTS',
     '*'
 ).split(',')
-STATIC_ROOT = "/app/collected_static"
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -102,7 +103,7 @@ USE_TZ = True
 
 
 STATIC_URL = '/static/'
-STATIC_ROOT = os.path.join(BASE_DIR, 'collected_static') 
+STATIC_ROOT = os.path.join(BASE_DIR, 'collected_static')
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
