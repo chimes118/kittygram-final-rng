@@ -35,7 +35,7 @@ jobs:
         run: flake8 backend
 
       - name: Run tests
-        run: pytest
+        run: pytest tests/test_files.py -v
 
   build_and_push_to_docker_hub:
     runs-on: ubuntu-latest
@@ -146,7 +146,7 @@ jobs:
           pip install -r backend/requirements.txt
 
       - name: Run connection tests
-        run: pytest
+        run: pytest tests/test_connection.py -v
 
   telegram-notify:
     runs-on: ubuntu-latest
